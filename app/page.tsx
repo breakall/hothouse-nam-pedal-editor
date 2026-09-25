@@ -1,12 +1,30 @@
 "use client";
 
 import { ChangeEvent, DragEvent, useMemo, useRef, useState } from "react";
+import {
+  backendFromInfo,
+  backendLabel,
+  parseDeviceSlot,
+  prepareCapture,
+  uploadCapture,
+  type Backend,
+  type PreparedCapture,
+} from "./capture-tools";
 
 type Slot = "A" | "B" | "C";
 type StagedSlotState = Record<Slot, File | null>;
 type DeviceCapture = { status: "installed"; name: string; size: number; format: string; crc: string };
 type DeviceSlot = DeviceCapture | { status: "empty" | "invalid" };
 type DeviceSlotState = Record<Slot, DeviceSlot>;
+type SerialPortLike = {
+  readable: ReadableStream<Uint8Array> | null;
+  writable: WritableStream<Uint8Array> | null;
+  open(options: { baudRate: number }): Promise<void>;
+  close(): Promise<void>;
+};
+type SerialNavigator = Navigator & {
+  serial?: { requestPort(): Promise<SerialPortLike> };
+};
 
 const reverbs = [
   { id: "hybrid", name: "Hybrid Space", description: "Articulate room", glyph: "✦" },
@@ -19,36 +37,16 @@ function size(bytes: number) {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function crc32(bytes: Uint8Array) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function hex(bytes: Uint8Array) {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function textFromHex(value: string) {
-  if (!value || value.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(value)) throw new Error("Pedal returned an invalid capture name");
-  const bytes = new Uint8Array(value.length / 2);
-  for (let index = 0; index < bytes.length; index += 1) bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
-  return new TextDecoder().decode(bytes);
-}
-
 export default function Home() {
   const [stagedSlots, setStagedSlots] = useState<StagedSlotState>({ A: null, B: null, C: null });
   const [deviceSlots, setDeviceSlots] = useState<DeviceSlotState>({ A: { status: "empty" }, B: { status: "empty" }, C: { status: "empty" } });
   const [up, setUp] = useState("hybrid");
   const [down, setDown] = useState("dattorro");
   const [notice, setNotice] = useState("Ready to connect");
-  const [backend, setBackend] = useState<string | null>(null);
+  const [backend, setBackend] = useState<Backend | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInputs = useRef<Record<Slot, HTMLInputElement | null>>({ A: null, B: null, C: null });
-  const portRef = useRef<any>(null);
+  const portRef = useRef<SerialPortLike | null>(null);
   const installed = useMemo(() => (["A", "B", "C"] as Slot[]).filter((slot) => stagedSlots[slot] || deviceSlots[slot].status === "installed").length, [deviceSlots, stagedSlots]);
 
   const choose = (slot: Slot, files: FileList | null) => {
@@ -106,7 +104,7 @@ export default function Home() {
     } finally { reader.releaseLock(); }
   };
   const connectPedal = async () => {
-    const serial = (navigator as any).serial;
+    const serial = (navigator as SerialNavigator).serial;
     if (!serial) { setNotice("Use Chrome or Edge on desktop for direct USB connection"); return; }
     try {
       setBusy(true);
@@ -114,23 +112,19 @@ export default function Home() {
       await port.open({ baudRate: 115200 });
       portRef.current = port;
       const info = await request("HNAM INFO", 4000);
-      if (info[0] !== "INFO" || !info[1]) throw new Error("This is not a Hothouse NAM pedal");
+      const detectedBackend = backendFromInfo(info);
       const nextSlots = {} as DeviceSlotState;
       for (const slot of ["A", "B", "C"] as Slot[]) {
         const detail = await request(`HNAM SLOT ${slot}`, 4000);
-        if (detail[0] !== "SLOT" || detail[1] !== slot || !["installed", "empty", "invalid"].includes(detail[2])) throw new Error(`Pedal returned invalid metadata for slot ${slot}`);
-        if (detail[2] === "installed") {
-          if (detail.length < 7) throw new Error(`Pedal returned incomplete metadata for slot ${slot}`);
-          nextSlots[slot] = { status: "installed", format: detail[3], size: Number(detail[4]), crc: detail[5], name: textFromHex(detail[6]) };
-        } else nextSlots[slot] = { status: detail[2] as "empty" | "invalid" };
+        nextSlots[slot] = parseDeviceSlot(slot, detail);
       }
       const reverb = await request("HNAM REVERB INFO", 4000);
       const connectedUp = reverb.find((value) => value.startsWith("up="))?.slice(3);
       const connectedDown = reverb.find((value) => value.startsWith("down="))?.slice(5);
       if (connectedUp && connectedDown) { setUp(connectedUp); setDown(connectedDown); }
       setDeviceSlots(nextSlots);
-      setBackend(info[1]);
-      setNotice(`Connected · ${info[1] === "a1_nano_relu" ? "A1 Nano-ReLU" : "A2-Lite"}`);
+      setBackend(detectedBackend);
+      setNotice(`Connected · ${backendLabel(detectedBackend)}`);
     } catch (error) {
       await portRef.current?.close?.().catch(() => undefined);
       portRef.current = null;
@@ -142,6 +136,13 @@ export default function Home() {
     if (!backend) { await connectPedal(); return; }
     try {
       setBusy(true);
+      setNotice("Checking capture compatibility…");
+      const prepared = new Map<Slot, PreparedCapture>();
+      for (const slot of ["A", "B", "C"] as Slot[]) {
+        const file = stagedSlots[slot];
+        if (!file) continue;
+        prepared.set(slot, prepareCapture(backend, file.name, new Uint8Array(await file.arrayBuffer())));
+      }
       const current = await request("HNAM REVERB INFO");
       const currentUp = current.find((value) => value.startsWith("up="))?.slice(3);
       let currentDown = current.find((value) => value.startsWith("down="))?.slice(5);
@@ -154,29 +155,32 @@ export default function Home() {
       }
       if (currentUp !== up) await request(`HNAM REVERB MAP UP ${up}`);
       if (currentDown !== down) await request(`HNAM REVERB MAP DOWN ${down}`);
-      if (backend !== "a1_nano_relu") {
-        setNotice("Reverb mapping sent. Direct A2 capture preparation is coming next.");
-        return;
-      }
       for (const slot of ["A", "B", "C"] as Slot[]) {
         const file = stagedSlots[slot];
-        if (!file) continue;
-        if (!file.name.toLowerCase().endsWith(".namb")) throw new Error(`Slot ${slot} needs a .namb file for A1 direct transfer`);
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        if (bytes.byteLength > 64 * 1024) throw new Error(`${file.name} exceeds A1's 64 KB limit`);
-        const name = file.name.replace(/\.namb$/i, "").slice(0, 63);
-        await request(`HNAM BEGIN ${slot} a1_namb ${bytes.byteLength} ${crc32(bytes).toString(16).padStart(8, "0")} ${hex(new TextEncoder().encode(name))}`, 20000);
-        for (let offset = 0; offset < bytes.length; offset += 128) {
-          const chunk = bytes.slice(offset, offset + 128);
-          await request(`HNAM DATA ${offset} ${hex(chunk)}`);
-          setNotice(`Sending ${file.name} · ${Math.round(((offset + chunk.length) / bytes.length) * 100)}%`);
-        }
-        await request("HNAM COMMIT", 15000);
-        setDeviceSlots((currentSlots) => ({ ...currentSlots, [slot]: { status: "installed", name, size: bytes.byteLength, format: "a1_namb", crc: crc32(bytes).toString(16).padStart(8, "0") } }));
+        const capture = prepared.get(slot);
+        if (!file || !capture) continue;
+        const checksum = await uploadCapture(request, slot, capture,
+          (percent) => setNotice(`Sending ${file.name} · ${percent}%`));
+        setDeviceSlots((currentSlots) => ({ ...currentSlots, [slot]: {
+          status: "installed", name: capture.name, size: capture.payload.length,
+          format: capture.format, crc: checksum,
+        } }));
         setStagedSlots((currentSlots) => ({ ...currentSlots, [slot]: null }));
       }
       setNotice("Configuration sent to pedal");
     } catch (error) { setNotice(error instanceof Error ? error.message : "Could not send configuration"); }
+    finally { setBusy(false); }
+  };
+  const deleteSlot = async (slot: Slot) => {
+    if (!backend) { setNotice("Connect the pedal before clearing a slot"); return; }
+    if (!window.confirm(`Clear capture slot ${slot} on the pedal?`)) return;
+    try {
+      setBusy(true);
+      const response = await request(`HNAM DELETE ${slot}`, 20000);
+      if (response[0] !== "DELETE" || response[1] !== slot) throw new Error("Pedal did not confirm the slot was cleared");
+      setDeviceSlots((current) => ({ ...current, [slot]: { status: "empty" } }));
+      setNotice(`Capture slot ${slot} cleared`);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Could not clear the slot"); }
     finally { setBusy(false); }
   };
 
@@ -199,15 +203,15 @@ export default function Home() {
           return <article className={`slot-card ${populated ? "has-file" : ""}`} key={slot}>
             <div className="slot-top"><span className="slot-letter">{slot}</span><span className="slot-position">{["UP", "CENTER", "DOWN"][index]}</span></div>
             {file ? <div className="file-loaded"><span className="file-icon">▤</span><div><strong>{file.name.replace(/\.(nam|namb)$/i, "")}</strong><small>STAGED · {file.name.split(".").pop()?.toUpperCase()} · {size(file.size)}</small></div><button className="remove" onClick={() => { setStagedSlots((current) => ({ ...current, [slot]: null })); setNotice(`Slot ${slot} staging cleared`); }} aria-label={`Undo replacement for slot ${slot}`}>×</button></div>
-              : deviceSlot.status === "installed" ? <div className="file-loaded"><span className="file-icon">▤</span><div><strong>{deviceSlot.name}</strong><small>ON PEDAL · {deviceSlot.format === "a2_weights_f32" ? "A2-LITE" : "NAMB"} · {size(deviceSlot.size)}</small></div><button className="replace" onClick={() => fileInputs.current[slot]?.click()}>Replace</button></div>
-                : deviceSlot.status === "invalid" ? <button className="drop-zone invalid-slot" onClick={() => fileInputs.current[slot]?.click()}><span>!</span><strong>Invalid capture</strong><small>choose a replacement</small></button>
+              : deviceSlot.status === "installed" ? <div className="file-loaded"><span className="file-icon">▤</span><div><strong>{deviceSlot.name}</strong><small>ON PEDAL · {deviceSlot.format === "a2_weights_f32" ? "A2-LITE" : "NAMB"} · {size(deviceSlot.size)}</small></div><div className="slot-actions"><button className="replace" onClick={() => fileInputs.current[slot]?.click()}>Replace</button><button className="clear-slot" onClick={() => deleteSlot(slot)}>Clear</button></div></div>
+                : deviceSlot.status === "invalid" ? <div className="invalid-capture"><button className="drop-zone invalid-slot" onClick={() => fileInputs.current[slot]?.click()}><span>!</span><strong>Unreadable slot data</strong><small>choose a compatible replacement</small></button><button className="clear-slot clear-invalid" onClick={() => deleteSlot(slot)} aria-label={`Clear unreadable data from slot ${slot}`}>Clear slot</button></div>
                   : <button className="drop-zone" onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDrop(e, slot)} onClick={() => fileInputs.current[slot]?.click()}><span>＋</span><strong>Drop a NAM here</strong><small>or choose a file</small></button>}
             <input ref={(el) => { fileInputs.current[slot] = el; }} onChange={(e: ChangeEvent<HTMLInputElement>) => choose(slot, e.target.files)} type="file" accept=".nam,.namb" hidden />
-            <p className="slot-foot">{file ? "Ready to send" : deviceSlot.status === "installed" ? `Stored in pedal · CRC ${deviceSlot.crc.toUpperCase()}` : "Accepts .nam or .namb"}</p>
+            <p className="slot-foot">{file ? "Ready to send" : deviceSlot.status === "installed" ? `Stored in pedal · CRC ${deviceSlot.crc.toUpperCase()}` : deviceSlot.status === "invalid" ? "Stored data failed validation" : "Accepts .nam or .namb"}</p>
           </article>;
         })}
       </div>
-      <p className="hint"><b>Compatibility is checked when you connect.</b> A1 uses Nano-ReLU / NAMB; A2-Lite uses compatible A2 `.nam` captures.</p>
+      <p className="hint"><b>Compatibility is checked before anything is sent.</b> A1 accepts device-safe Nano-ReLU `.nam` files or `.namb`; A2-Lite searches every model in a Tone3000 `.nam` download for a compatible submodel.</p>
     </section>
     <section className="reverb-section">
       <div className="section-heading"><div><p className="eyebrow">02 / Toggle 1</p><h2>Reverb assignment</h2></div><p>Center is bypass. UP and DOWN must use different engines.</p></div>
@@ -216,6 +220,6 @@ export default function Home() {
         {reverbs.map((reverb) => <article className={`reverb-card ${up === reverb.id || down === reverb.id ? "chosen" : ""}`} key={reverb.id}><span className="reverb-glyph">{reverb.glyph}</span><div><h3>{reverb.name}</h3><p>{reverb.description}</p></div><div className="assignments"><button className={up === reverb.id ? "active" : ""} onClick={() => selectReverb("up", reverb.id)}>UP</button><button className={down === reverb.id ? "active" : ""} onClick={() => selectReverb("down", reverb.id)}>DOWN</button></div></article>)}
       </div>
     </section>
-    <footer className="actionbar"><div><span className="status-dot" /><b>{notice}</b><small>Chrome / Edge required for direct USB transfer.</small></div><button className="apply" onClick={sendConfiguration} disabled={busy}>{backend ? "Send to pedal" : "Connect & send"} <span>→</span></button></footer>
+    <footer className="actionbar"><div><span className="status-dot" /><b>{notice}</b><small>Chrome / Edge required for direct USB transfer.</small></div><button className="apply" onClick={sendConfiguration} disabled={busy}>{backend ? "Send to pedal" : "Connect pedal"} <span>→</span></button></footer>
   </main>;
 }
