@@ -3,7 +3,6 @@
 import { ChangeEvent, DragEvent, useMemo, useRef, useState } from "react";
 import {
   backendFromInfo,
-  backendLabel,
   parseDeviceSlot,
   prepareCapture,
   uploadCapture,
@@ -54,8 +53,8 @@ export default function Home() {
   const choose = async (slot: Slot, files: FileList | null) => {
     const file = files?.[0];
     if (!file) return;
-    if (!/\.(nam|namb)$/i.test(file.name)) {
-      setNotice("Choose a .nam or .namb capture file");
+    if (!/\.nam$/i.test(file.name)) {
+      setNotice("Choose a Tone3000 .nam download containing an A2-Lite model");
       return;
     }
     try {
@@ -205,7 +204,7 @@ export default function Home() {
   return <main>
     <header className="topbar">
       <a className="brand" href="#top" aria-label="Hothouse NAM editor home"><span className="brand-mark">H</span> Hothouse <b>NAM</b></a>
-      <div className="connection"><span className="status-dot" /> {backend ? `Connected · ${backend}` : "Pedal not connected"} <button onClick={connectPedal} disabled={busy}>{busy ? "Working…" : backend ? "Reconnect" : "Connect pedal"}</button></div>
+      <div className="connection"><span className="status-dot" /> {backend ? "Connected · A2-Lite" : "Pedal not connected"} <button onClick={connectPedal} disabled={busy}>{busy ? "Working…" : backend ? "Reconnect" : "Connect pedal"}</button></div>
     </header>
     <section className="hero" id="top">
       <div><p className="eyebrow">Preset editor <span>•</span> Device 01</p><h1>Current <em>rig</em></h1></div>
@@ -220,16 +219,16 @@ export default function Home() {
           const populated = file || deviceSlot.status === "installed";
           return <article className={`slot-card ${populated ? "has-file" : ""}`} key={slot}>
             <div className="slot-top"><span className="slot-letter">{slot}</span><span className="slot-position">{["UP", "CENTER", "DOWN"][index]}</span></div>
-            {file ? <div className="file-loaded"><span className="file-icon">▤</span><div><strong>{file.name.replace(/\.(nam|namb)$/i, "")}</strong><small>STAGED · {file.name.split(".").pop()?.toUpperCase()} · {size(file.size)}</small></div><button className="remove" onClick={() => { setStagedSlots((current) => ({ ...current, [slot]: null })); setValidatedSlots((current) => ({ ...current, [slot]: false })); setNotice(`Slot ${slot} staging cleared`); }} aria-label={`Undo replacement for slot ${slot}`}>×</button></div>
-              : deviceSlot.status === "installed" ? <div className="file-loaded"><span className="file-icon">▤</span><div><strong>{deviceSlot.name}</strong><small>ON PEDAL · {deviceSlot.format === "a2_weights_f32" ? "A2-LITE" : "NAMB"} · {size(deviceSlot.size)}</small></div><div className="slot-actions"><button className="replace" onClick={() => fileInputs.current[slot]?.click()}>Replace</button><button className="clear-slot" onClick={() => deleteSlot(slot)}>Clear</button></div></div>
+            {file ? <div className="file-loaded"><span className="file-icon">▤</span><div><strong>{file.name.replace(/\.nam$/i, "")}</strong><small>STAGED · NAM · {size(file.size)}</small></div><button className="remove" onClick={() => { setStagedSlots((current) => ({ ...current, [slot]: null })); setValidatedSlots((current) => ({ ...current, [slot]: false })); setNotice(`Slot ${slot} staging cleared`); }} aria-label={`Undo replacement for slot ${slot}`}>×</button></div>
+              : deviceSlot.status === "installed" ? <div className="file-loaded"><span className="file-icon">▤</span><div><strong>{deviceSlot.name}</strong><small>ON PEDAL · A2-LITE · {size(deviceSlot.size)}</small></div><div className="slot-actions"><button className="replace" onClick={() => fileInputs.current[slot]?.click()}>Replace</button><button className="clear-slot" onClick={() => deleteSlot(slot)}>Clear</button></div></div>
                 : deviceSlot.status === "invalid" ? <div className="invalid-capture"><button className="drop-zone invalid-slot" onClick={() => fileInputs.current[slot]?.click()}><span>!</span><strong>Unreadable slot data</strong><small>choose a compatible replacement</small></button><button className="clear-slot clear-invalid" onClick={() => deleteSlot(slot)} aria-label={`Clear unreadable data from slot ${slot}`}>Clear slot</button></div>
                   : <button className="drop-zone" onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDrop(e, slot)} onClick={() => fileInputs.current[slot]?.click()}><span>＋</span><strong>Drop a NAM here</strong><small>or choose a file</small></button>}
-            <input ref={(el) => { fileInputs.current[slot] = el; }} onChange={(e: ChangeEvent<HTMLInputElement>) => choose(slot, e.target.files)} type="file" accept=".nam,.namb" hidden />
-            <p className="slot-foot">{file ? validatedSlots[slot] ? "Compatible · Ready to send" : "Connect to check compatibility" : deviceSlot.status === "installed" ? `Stored in pedal · CRC ${deviceSlot.crc.toUpperCase()}` : deviceSlot.status === "invalid" ? "Stored data failed validation" : "Accepts .nam or .namb"}</p>
+            <input ref={(el) => { fileInputs.current[slot] = el; }} onChange={(e: ChangeEvent<HTMLInputElement>) => choose(slot, e.target.files)} type="file" accept=".nam" hidden />
+            <p className="slot-foot">{file ? validatedSlots[slot] ? "Compatible · Ready to send" : "Connect to check compatibility" : deviceSlot.status === "installed" ? `Stored in pedal · CRC ${deviceSlot.crc.toUpperCase()}` : deviceSlot.status === "invalid" ? "Stored data failed validation" : "Accepts Tone3000 .nam downloads"}</p>
           </article>;
         })}
       </div>
-      <p className="hint"><b>Compatibility is checked before anything is sent.</b> A1 accepts device-safe Nano-ReLU `.nam` files or `.namb`; A2-Lite searches every model in a Tone3000 `.nam` download for a compatible submodel.</p>
+      <p className="hint"><b>Compatibility is checked before anything is sent.</b> The editor searches every model in a Tone3000 .nam download and selects a device-compatible A2-Lite model.</p>
     </section>
     <section className="reverb-section">
       <div className="section-heading"><div><p className="eyebrow">02 / Toggle 1</p><h2>Reverb assignment</h2></div><p>Center is bypass. UP and DOWN must use different engines.</p></div>
