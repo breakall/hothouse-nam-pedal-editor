@@ -139,11 +139,12 @@ export default function Home() {
       setDeviceSlots(nextSlots);
       setBackend(detectedBackend);
       setValidatedSlots({ A: false, B: false, C: false });
-      setNotice(`Connected · ${backendLabel(detectedBackend)}`);
+      setNotice("Connected · A2-Lite");
     } catch (error) {
       await portRef.current?.close?.().catch(() => undefined);
       portRef.current = null;
       setBackend(null);
+      setDeviceSlots({ A: { status: "empty" }, B: { status: "empty" }, C: { status: "empty" } });
       setNotice(error instanceof Error ? error.message : "Unable to connect to pedal");
     } finally { setBusy(false); }
   };
