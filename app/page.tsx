@@ -13,6 +13,7 @@ import {
 
 type Slot = "A" | "B" | "C";
 type StagedSlotState = Record<Slot, File | null>;
+type ValidationState = Record<Slot, boolean>;
 type DeviceCapture = { status: "installed"; name: string; size: number; format: string; crc: string };
 type DeviceSlot = DeviceCapture | { status: "empty" | "invalid" };
 type DeviceSlotState = Record<Slot, DeviceSlot>;
@@ -39,6 +40,7 @@ function size(bytes: number) {
 
 export default function Home() {
   const [stagedSlots, setStagedSlots] = useState<StagedSlotState>({ A: null, B: null, C: null });
+  const [validatedSlots, setValidatedSlots] = useState<ValidationState>({ A: false, B: false, C: false });
   const [deviceSlots, setDeviceSlots] = useState<DeviceSlotState>({ A: { status: "empty" }, B: { status: "empty" }, C: { status: "empty" } });
   const [up, setUp] = useState("hybrid");
   const [down, setDown] = useState("dattorro");
@@ -49,15 +51,28 @@ export default function Home() {
   const portRef = useRef<SerialPortLike | null>(null);
   const installed = useMemo(() => (["A", "B", "C"] as Slot[]).filter((slot) => stagedSlots[slot] || deviceSlots[slot].status === "installed").length, [deviceSlots, stagedSlots]);
 
-  const choose = (slot: Slot, files: FileList | null) => {
+  const choose = async (slot: Slot, files: FileList | null) => {
     const file = files?.[0];
     if (!file) return;
     if (!/\.(nam|namb)$/i.test(file.name)) {
       setNotice("Choose a .nam or .namb capture file");
       return;
     }
-    setStagedSlots((current) => ({ ...current, [slot]: file }));
-    setNotice(`${file.name} staged in slot ${slot}`);
+    try {
+      if (backend) {
+        setNotice(`Checking ${file.name}…`);
+        prepareCapture(backend, file.name, new Uint8Array(await file.arrayBuffer()));
+      }
+      setStagedSlots((current) => ({ ...current, [slot]: file }));
+      setValidatedSlots((current) => ({ ...current, [slot]: Boolean(backend) }));
+      setNotice(backend
+        ? `${file.name} is compatible and ready for slot ${slot}`
+        : `${file.name} selected · connect the pedal to check compatibility`);
+    } catch (error) {
+      setStagedSlots((current) => ({ ...current, [slot]: null }));
+      setValidatedSlots((current) => ({ ...current, [slot]: false }));
+      setNotice(error instanceof Error ? error.message : "Capture is not compatible with this pedal");
+    }
   };
   const onDrop = (event: DragEvent<HTMLButtonElement>, slot: Slot) => {
     event.preventDefault();
@@ -124,6 +139,7 @@ export default function Home() {
       if (connectedUp && connectedDown) { setUp(connectedUp); setDown(connectedDown); }
       setDeviceSlots(nextSlots);
       setBackend(detectedBackend);
+      setValidatedSlots({ A: false, B: false, C: false });
       setNotice(`Connected · ${backendLabel(detectedBackend)}`);
     } catch (error) {
       await portRef.current?.close?.().catch(() => undefined);
@@ -142,6 +158,7 @@ export default function Home() {
         const file = stagedSlots[slot];
         if (!file) continue;
         prepared.set(slot, prepareCapture(backend, file.name, new Uint8Array(await file.arrayBuffer())));
+        setValidatedSlots((current) => ({ ...current, [slot]: true }));
       }
       const current = await request("HNAM REVERB INFO");
       const currentUp = current.find((value) => value.startsWith("up="))?.slice(3);
@@ -166,6 +183,7 @@ export default function Home() {
           format: capture.format, crc: checksum,
         } }));
         setStagedSlots((currentSlots) => ({ ...currentSlots, [slot]: null }));
+        setValidatedSlots((currentSlots) => ({ ...currentSlots, [slot]: false }));
       }
       setNotice("Configuration sent to pedal");
     } catch (error) { setNotice(error instanceof Error ? error.message : "Could not send configuration"); }
@@ -202,12 +220,12 @@ export default function Home() {
           const populated = file || deviceSlot.status === "installed";
           return <article className={`slot-card ${populated ? "has-file" : ""}`} key={slot}>
             <div className="slot-top"><span className="slot-letter">{slot}</span><span className="slot-position">{["UP", "CENTER", "DOWN"][index]}</span></div>
-            {file ? <div className="file-loaded"><span className="file-icon">▤</span><div><strong>{file.name.replace(/\.(nam|namb)$/i, "")}</strong><small>STAGED · {file.name.split(".").pop()?.toUpperCase()} · {size(file.size)}</small></div><button className="remove" onClick={() => { setStagedSlots((current) => ({ ...current, [slot]: null })); setNotice(`Slot ${slot} staging cleared`); }} aria-label={`Undo replacement for slot ${slot}`}>×</button></div>
+            {file ? <div className="file-loaded"><span className="file-icon">▤</span><div><strong>{file.name.replace(/\.(nam|namb)$/i, "")}</strong><small>STAGED · {file.name.split(".").pop()?.toUpperCase()} · {size(file.size)}</small></div><button className="remove" onClick={() => { setStagedSlots((current) => ({ ...current, [slot]: null })); setValidatedSlots((current) => ({ ...current, [slot]: false })); setNotice(`Slot ${slot} staging cleared`); }} aria-label={`Undo replacement for slot ${slot}`}>×</button></div>
               : deviceSlot.status === "installed" ? <div className="file-loaded"><span className="file-icon">▤</span><div><strong>{deviceSlot.name}</strong><small>ON PEDAL · {deviceSlot.format === "a2_weights_f32" ? "A2-LITE" : "NAMB"} · {size(deviceSlot.size)}</small></div><div className="slot-actions"><button className="replace" onClick={() => fileInputs.current[slot]?.click()}>Replace</button><button className="clear-slot" onClick={() => deleteSlot(slot)}>Clear</button></div></div>
                 : deviceSlot.status === "invalid" ? <div className="invalid-capture"><button className="drop-zone invalid-slot" onClick={() => fileInputs.current[slot]?.click()}><span>!</span><strong>Unreadable slot data</strong><small>choose a compatible replacement</small></button><button className="clear-slot clear-invalid" onClick={() => deleteSlot(slot)} aria-label={`Clear unreadable data from slot ${slot}`}>Clear slot</button></div>
                   : <button className="drop-zone" onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDrop(e, slot)} onClick={() => fileInputs.current[slot]?.click()}><span>＋</span><strong>Drop a NAM here</strong><small>or choose a file</small></button>}
             <input ref={(el) => { fileInputs.current[slot] = el; }} onChange={(e: ChangeEvent<HTMLInputElement>) => choose(slot, e.target.files)} type="file" accept=".nam,.namb" hidden />
-            <p className="slot-foot">{file ? "Ready to send" : deviceSlot.status === "installed" ? `Stored in pedal · CRC ${deviceSlot.crc.toUpperCase()}` : deviceSlot.status === "invalid" ? "Stored data failed validation" : "Accepts .nam or .namb"}</p>
+            <p className="slot-foot">{file ? validatedSlots[slot] ? "Compatible · Ready to send" : "Connect to check compatibility" : deviceSlot.status === "installed" ? `Stored in pedal · CRC ${deviceSlot.crc.toUpperCase()}` : deviceSlot.status === "invalid" ? "Stored data failed validation" : "Accepts .nam or .namb"}</p>
           </article>;
         })}
       </div>

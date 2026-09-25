@@ -3,7 +3,7 @@ export const A1_WEIGHT_COUNT = 842;
 export const A2_WEIGHT_COUNT = 1871;
 export const CHUNK_SIZE = 128;
 
-export type Backend = "a1_nano_relu" | "a2_lite";
+export type Backend = "a1_a2" | "a1_nano_relu" | "a2_lite";
 
 export type PreparedCapture = {
   format: "a1_namb" | "a2_weights_f32";
@@ -55,10 +55,11 @@ function finiteNumber(value: unknown) {
 }
 
 export function isSupportedBackend(value: string): value is Backend {
-  return value === "a1_nano_relu" || value === "a2_lite";
+  return value === "a1_a2" || value === "a1_nano_relu" || value === "a2_lite";
 }
 
 export function backendLabel(backend: Backend) {
+  if (backend === "a1_a2") return "A1 Nano-ReLU + A2-Lite";
   return backend === "a1_nano_relu" ? "A1 Nano-ReLU" : "A2-Lite";
 }
 
@@ -405,6 +406,27 @@ function parseNam(bytes: Uint8Array) {
 
 export function prepareCapture(backend: Backend, fileName: string, bytes: Uint8Array): PreparedCapture {
   const suffix = fileName.toLowerCase().split(".").pop();
+  if (backend === "a1_a2") {
+    if (suffix === "namb") {
+      validateA1Namb(bytes);
+      return { format: "a1_namb", name: captureName(fileName), payload: bytes };
+    }
+    requireCapture(suffix === "nam", "Combined firmware accepts .nam or .namb files.");
+    const document = parseNam(bytes);
+    try {
+      const selected = selectA2Lite(document);
+      const buffer = new ArrayBuffer(selected.weights.length * 4);
+      const view = new DataView(buffer);
+      selected.weights.forEach((weight, index) => view.setFloat32(index * 4, weight, true));
+      return { format: "a2_weights_f32", name: captureName(fileName, document), payload: new Uint8Array(buffer) };
+    } catch (a2Error) {
+      try {
+        return { format: "a1_namb", name: captureName(fileName, document), payload: encodeA1Namb(document) };
+      } catch (a1Error) {
+        throw new Error(`Capture is not compatible with this pedal. A2-Lite check: ${a2Error instanceof Error ? a2Error.message : String(a2Error)}. A1 Nano-ReLU check: ${a1Error instanceof Error ? a1Error.message : String(a1Error)}`);
+      }
+    }
+  }
   if (backend === "a1_nano_relu") {
     if (suffix === "namb") {
       validateA1Namb(bytes);

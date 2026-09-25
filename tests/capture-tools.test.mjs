@@ -99,6 +99,17 @@ test("searches all Tone3000 submodels and packs the compatible A2 weights", () =
   assert.equal(new DataView(prepared.payload.buffer).getFloat32(4, true), 0.0010000000474974513);
 });
 
+test("combined firmware accepts A2 and A1 captures", () => {
+  const a2 = prepareCapture("a1_a2", "tone3000.nam", bytes(validA2()));
+  assert.equal(a2.format, "a2_weights_f32");
+  assert.equal(a2.payload.length, 1871 * 4);
+
+  const a1Document = validA1();
+  const a1 = prepareCapture("a1_a2", "nano.nam", bytes(a1Document));
+  assert.equal(a1.format, "a1_namb");
+  assert.deepEqual(a1.payload, encodeA1Namb(a1Document));
+});
+
 test("explains why no A2 submodel can run", () => {
   const incompatible = validA2();
   incompatible.config.layers[0].channels = 8;
@@ -108,6 +119,7 @@ test("explains why no A2 submodel can run", () => {
 });
 
 test("discovers supported firmware and parses all slot states", () => {
+  assert.equal(backendFromInfo(["INFO", "a1_a2", "empty", "0", "00000000"]), "a1_a2");
   assert.equal(backendFromInfo(["INFO", "a1_nano_relu", "installed", "100", "12345678"]), "a1_nano_relu");
   assert.throws(() => backendFromInfo(["INFO", "future_backend"]), /unsupported firmware backend/);
   assert.deepEqual(parseDeviceSlot("A", ["SLOT", "A", "empty", "unknown", "0", "00000000", "-"]), { status: "empty" });
