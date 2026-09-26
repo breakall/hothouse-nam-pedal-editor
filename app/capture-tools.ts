@@ -7,6 +7,7 @@ export type PreparedCapture = {
   format: "a2_weights_f32";
   name: string;
   payload: Uint8Array;
+  loudnessMillidb: number | null;
 };
 
 type JsonObject = Record<string, unknown>;
@@ -141,6 +142,11 @@ export function prepareCapture(_backend: Backend, fileName: string, bytes: Uint8
     format: "a2_weights_f32",
     name: captureName(fileName, document),
     payload: new Uint8Array(buffer),
+    loudnessMillidb: (() => {
+      const loudness = finiteNumber(object(selected.model.metadata)?.loudness);
+      return loudness !== null && loudness >= -120 && loudness <= 24
+        ? Math.round(loudness * 1000) : null;
+    })(),
   };
 }
 

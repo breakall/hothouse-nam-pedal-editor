@@ -43,6 +43,7 @@ export default function Home() {
   const [deviceSlots, setDeviceSlots] = useState<DeviceSlotState>({ A: { status: "empty" }, B: { status: "empty" }, C: { status: "empty" } });
   const [up, setUp] = useState("hybrid");
   const [down, setDown] = useState("dattorro");
+  const [levelMatch, setLevelMatch] = useState(false);
   const [notice, setNotice] = useState("Ready to connect");
   const [backend, setBackend] = useState<Backend | null>(null);
   const [busy, setBusy] = useState(false);
@@ -136,6 +137,10 @@ export default function Home() {
       const connectedUp = reverb.find((value) => value.startsWith("up="))?.slice(3);
       const connectedDown = reverb.find((value) => value.startsWith("down="))?.slice(5);
       if (connectedUp && connectedDown) { setUp(connectedUp); setDown(connectedDown); }
+      const level = await request("HNAM LEVEL INFO", 4000);
+      const enabled = level.find((value) => value.startsWith("enabled="))?.slice(8);
+      if (enabled !== "0" && enabled !== "1") throw new Error("Pedal returned invalid level-match settings");
+      setLevelMatch(enabled === "1");
       setDeviceSlots(nextSlots);
       setBackend(detectedBackend);
       setValidatedSlots({ A: false, B: false, C: false });
@@ -178,6 +183,12 @@ export default function Home() {
         if (!file || !capture) continue;
         const checksum = await uploadCapture(request, slot, capture,
           (percent) => setNotice(`Sending ${file.name} · ${percent}%`));
+        if (capture.loudnessMillidb !== null) {
+          const level = await request(`HNAM LEVEL SLOT ${slot} ${capture.loudnessMillidb}`);
+          if (level[0] !== "LEVEL" || level[1] !== "SLOT" || level[2] !== slot) {
+            throw new Error("Pedal did not save capture loudness");
+          }
+        }
         setDeviceSlots((currentSlots) => ({ ...currentSlots, [slot]: {
           status: "installed", name: capture.name, size: capture.payload.length,
           format: capture.format, crc: checksum,
@@ -185,6 +196,8 @@ export default function Home() {
         setStagedSlots((currentSlots) => ({ ...currentSlots, [slot]: null }));
         setValidatedSlots((currentSlots) => ({ ...currentSlots, [slot]: false }));
       }
+      const level = await request(`HNAM LEVEL ENABLE ${levelMatch ? "1" : "0"}`);
+      if (level[0] !== "LEVEL" || level[1] !== "ENABLE") throw new Error("Pedal did not save level-match setting");
       setNotice("Configuration sent to pedal");
     } catch (error) { setNotice(error instanceof Error ? error.message : "Could not send configuration"); }
     finally { setBusy(false); }
@@ -231,8 +244,12 @@ export default function Home() {
       </div>
       <p className="hint"><b>Compatibility is checked before anything is sent.</b> The editor searches every model in a Tone3000 .nam download and selects a device-compatible A2-Lite model.</p>
     </section>
+    <section className="level-section">
+      <div className="section-heading"><div><p className="eyebrow">02 / Global</p><h2>Capture level matching</h2></div><p>Matches NAM loudness metadata before the physical Volume knob, so your master level stays independent.</p></div>
+      <label className="level-toggle"><input type="checkbox" checked={levelMatch} onChange={(event) => setLevelMatch(event.target.checked)} disabled={busy} /><span><b>Level match captures</b><small>Uses the loudest loaded capture as the reference. Re-send existing slots once after updating firmware to store their loudness.</small></span></label>
+    </section>
     <section className="reverb-section">
-      <div className="section-heading"><div><p className="eyebrow">02 / Toggle 1</p><h2>Reverb assignment</h2></div><p>Center is bypass. UP and DOWN must use different engines.</p></div>
+      <div className="section-heading"><div><p className="eyebrow">03 / Toggle 1</p><h2>Reverb assignment</h2></div><p>Center is bypass. UP and DOWN must use different engines.</p></div>
       <div className="toggle-map"><div className="position-label up-label">UP <span>Toggle 1</span></div><div className="toggle-visual"><div className="switch-cap" /><div className="switch-line" /><div className="switch-base"><b>UP</b><b>OFF</b><b>DOWN</b></div></div><div className="position-label down-label">DOWN <span>Toggle 1</span></div></div>
       <div className="reverb-grid">
         {reverbs.map((reverb) => <article className={`reverb-card ${up === reverb.id || down === reverb.id ? "chosen" : ""}`} key={reverb.id}><span className="reverb-glyph">{reverb.glyph}</span><div><h3>{reverb.name}</h3><p>{reverb.description}</p></div><div className="assignments"><button className={up === reverb.id ? "active" : ""} onClick={() => selectReverb("up", reverb.id)}>UP</button><button className={down === reverb.id ? "active" : ""} onClick={() => selectReverb("down", reverb.id)}>DOWN</button></div></article>)}
