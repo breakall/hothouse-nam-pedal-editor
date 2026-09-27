@@ -35,8 +35,7 @@ function requireCapture(condition: unknown, message: string): asserts condition 
 }
 
 function finiteNumber(value: unknown) {
-  const number = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(number) ? number : null;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export function isSupportedBackend(value: string): value is Backend {
@@ -89,7 +88,8 @@ export function validateA2Lite(model: JsonObject) {
   requireCapture(Array.isArray(weights) && weights.length === A2_WEIGHT_COUNT,
     `expected exactly ${A2_WEIGHT_COUNT} weights`);
   const values = weights.map(finiteNumber);
-  requireCapture(values.every((value) => value !== null), "weights must all be finite");
+  requireCapture(values.every((value) => value !== null && Number.isFinite(Math.fround(value))),
+    "weights must all be finite 32-bit floats");
   return values as number[];
 }
 

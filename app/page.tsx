@@ -246,7 +246,7 @@ export default function Home() {
     </section>
     <section className="level-section">
       <div className="section-heading"><div><p className="eyebrow">02 / Global</p><h2>Capture level matching</h2></div><p>Matches NAM loudness metadata before the physical Volume knob, so your master level stays independent.</p></div>
-      <label className="level-toggle"><input type="checkbox" checked={levelMatch} onChange={(event) => setLevelMatch(event.target.checked)} disabled={busy} /><span><b>Level match captures</b><small>Uses the loudest loaded capture as the reference. Re-send existing slots once after updating firmware to store their loudness.</small></span></label>
+      <label className="level-toggle" aria-label="Level match captures"><input type="checkbox" checked={levelMatch} onChange={(event) => setLevelMatch(event.target.checked)} disabled={busy} /><span><b>Level match captures</b><small>Uses the loudest loaded capture as the reference. Re-send existing slots once after updating firmware to store their loudness.</small></span></label>
     </section>
     <section className="reverb-section">
       <div className="section-heading"><div><p className="eyebrow">03 / Toggle 1</p><h2>Reverb assignment</h2></div><p>Center is bypass. UP and DOWN must use different engines.</p></div>

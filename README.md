@@ -30,3 +30,8 @@ npm run lint
 `npm test` performs the production build, exercises A2-Lite compatibility and
 preparation, and verifies multi-submodel selection and transfer protocol
 behavior.
+
+## License
+
+Hothouse NAM Editor is licensed under the GNU General Public License v3.0.
+See [LICENSE](LICENSE) for the full terms.

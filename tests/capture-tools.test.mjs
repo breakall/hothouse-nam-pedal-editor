@@ -63,6 +63,21 @@ test("gives friendly file and compatibility errors", () => {
   })), /This capture cannot run on the pedal.*No device-compatible A2-Lite model found.*submodel 0: expected 3-channel/s);
 });
 
+test("rejects non-numeric and float32-overflow weights", () => {
+  for (const value of [null, true, "1.0", 1e100]) {
+    const invalid = validA2();
+    invalid.weights[10] = value;
+    assert.throws(() => prepareCapture("a2_lite", "invalid.nam", bytes(invalid)),
+      /weights must all be finite 32-bit floats/);
+  }
+});
+
+test("does not treat null loudness metadata as zero decibels", () => {
+  const model = validA2();
+  model.metadata = { loudness: null };
+  assert.equal(prepareCapture("a2_lite", "capture.nam", bytes(model)).loudnessMillidb, null);
+});
+
 test("accepts only current firmware and validates slot metadata", () => {
   assert.equal(backendFromInfo(["INFO", "a2_lite", "empty", "0", "00000000"]), "a2_lite");
   assert.throws(() => backendFromInfo(["INFO", "outdated_backend"]), /incompatible firmware.*latest Hothouse firmware/);
